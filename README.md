@@ -141,12 +141,16 @@ What the workflow does:
 5. Builds the frontend and serves it with `vite preview` on port 5173. The proxy is the same, and `VITE_API_BASE_URL=/api`, so the build never calls the production API. The dev server is too slow on a fresh runner.
 6. Runs the suite, then uploads the **allure-report** and **test-output** artifacts (results, traces, surefire reports, backend and frontend logs). The run summary shows the counts.
 
-Set these repository secrets before the first run:
+No secrets are needed. The test users exist only in the new CI database of
+each run, so the workflow makes a random password for each of them and hides it
+in the log. Your local test passwords never go to GitHub.
+
+Optional repository secrets:
 
 | Secret | Value |
 |---|---|
-| `E2E_CUSTOMER_PASSWORD`, `E2E_EMPLOYEE_PASSWORD`, `E2E_OWNER_PASSWORD`, `E2E_SALON2EMPLOYEE_PASSWORD` | Any strong passwords. The CI database is new in each run; the hashes are made at run time. |
-| `REPOS_TOKEN` (optional) | A token with read access to the backend and frontend repositories. Needed only if they are private. |
+| `E2E_CUSTOMER_PASSWORD`, `E2E_EMPLOYEE_PASSWORD`, `E2E_OWNER_PASSWORD`, `E2E_SALON2EMPLOYEE_PASSWORD` | Fixed test passwords, used instead of the random ones. |
+| `REPOS_TOKEN` | A token with read access to the backend and frontend repositories. Needed only if they are private. |
 
 The workflow tests the pushed backend and frontend code. Changes that the tests need must be on `master` / `main` first.
 

@@ -4,10 +4,13 @@ name: E2E tests
 # runner, fills an empty database with test data, runs a test suite and
 # publishes the Allure report as an artifact.
 #
-# Repository secrets:
+# No secrets are needed. The test users exist only in the new CI database, so
+# each run makes random passwords for them.
+#
+# Optional repository secrets:
 #   E2E_CUSTOMER_PASSWORD, E2E_EMPLOYEE_PASSWORD, E2E_OWNER_PASSWORD,
-#   E2E_SALON2EMPLOYEE_PASSWORD  - any strong passwords; the CI database is new each run
-#   REPOS_TOKEN (optional)       - read access to the backend and frontend repositories,
+#   E2E_SALON2EMPLOYEE_PASSWORD  - fixed test passwords instead of random ones
+#   REPOS_TOKEN       - read access to the backend and frontend repositories,
 #                                  needed only when they are private
 
 on:
@@ -55,14 +58,11 @@ jobs:
     env:
       SUITE: ${{ inputs.suite || 'regression' }}
       # Test accounts (read by Config: account.customer.email -> ACCOUNT_CUSTOMER_EMAIL)
+      # The passwords (ACCOUNT_*_PASSWORD) come from the "Make the test passwords" step.
       ACCOUNT_CUSTOMER_EMAIL: lina.customer@salonhub.test
-      ACCOUNT_CUSTOMER_PASSWORD: ${{ secrets.E2E_CUSTOMER_PASSWORD }}
       ACCOUNT_EMPLOYEE_EMAIL: sara.employee@salonhub.test
-      ACCOUNT_EMPLOYEE_PASSWORD: ${{ secrets.E2E_EMPLOYEE_PASSWORD }}
       ACCOUNT_OWNER_EMAIL: omar.owner@salonhub.test
-      ACCOUNT_OWNER_PASSWORD: ${{ secrets.E2E_OWNER_PASSWORD }}
       ACCOUNT_SALON2EMPLOYEE_EMAIL: rami.employee@salonhub.test
-      ACCOUNT_SALON2EMPLOYEE_PASSWORD: ${{ secrets.E2E_SALON2EMPLOYEE_PASSWORD }}
       MYSQL_PWD: root
 
     steps:
@@ -85,10 +85,23 @@ jobs:
           path: stack/frontend
           token: ${{ secrets.REPOS_TOKEN || github.token }}
 
-      - name: Check the secrets
+      # Only the made-up test users of this run's database get these passwords.
+      # A secret, when set, is used instead of a random password.
+      - name: Make the test passwords
+        env:
+          FIXED_CUSTOMER: ${{ secrets.E2E_CUSTOMER_PASSWORD }}
+          FIXED_EMPLOYEE: ${{ secrets.E2E_EMPLOYEE_PASSWORD }}
+          FIXED_OWNER: ${{ secrets.E2E_OWNER_PASSWORD }}
+          FIXED_SALON2EMPLOYEE: ${{ secrets.E2E_SALON2EMPLOYEE_PASSWORD }}
         run: |
-          for name in ACCOUNT_CUSTOMER_PASSWORD ACCOUNT_EMPLOYEE_PASSWORD ACCOUNT_OWNER_PASSWORD ACCOUNT_SALON2EMPLOYEE_PASSWORD; do
-            if [ -z "${!name}" ]; then echo "::error::Secret for $name is not set"; exit 1; fi
+          for role in CUSTOMER EMPLOYEE OWNER SALON2EMPLOYEE; do
+            fixed="FIXED_$role"
+            password="${!fixed}"
+            if [ -z "$password" ]; then
+              password="Ci-$(openssl rand -hex 16)"
+            fi
+            echo "::add-mask::$password"
+            echo "ACCOUNT_${role}_PASSWORD=$password" >> "$GITHUB_ENV"
           done
 
       - uses: actions/setup-java@v4
