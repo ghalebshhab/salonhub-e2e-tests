@@ -1,0 +1,30 @@
+[
+  {
+    "name": "Server not reachable",
+    "description": "The backend or the frontend dev server did not answer. Check that both run.",
+    "matchedStatuses": ["broken", "failed"],
+    "messageRegex": "(?s).*(Connection refused|ConnectException|ERR_CONNECTION_REFUSED|UnknownHostException).*"
+  },
+  {
+    "name": "UI timeout",
+    "description": "An element or page did not come in time. Often a slow machine or a changed selector.",
+    "matchedStatuses": ["broken", "failed"],
+    "messageRegex": "(?s).*(TimeoutError|Timeout \\d+ms exceeded).*"
+  },
+  {
+    "name": "Rate limit (HTTP 429)",
+    "description": "The backend refused too many requests. The local profile must allow many logins.",
+    "matchedStatuses": ["broken", "failed"],
+    "messageRegex": "(?s).*429.*"
+  },
+  {
+    "name": "Product defect (wrong result)",
+    "description": "A check failed: the application gave a different result than expected.",
+    "matchedStatuses": ["failed"]
+  },
+  {
+    "name": "Test defect (code error)",
+    "description": "The test code threw an error before its checks finished.",
+    "matchedStatuses": ["broken"]
+  }
+]

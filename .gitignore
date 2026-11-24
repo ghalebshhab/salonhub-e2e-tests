@@ -1,0 +1,11 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Local passwords of the seeded test accounts
+src/test/resources/test-accounts.properties
+
+# Allure command line that allure-maven downloads
+.allure/

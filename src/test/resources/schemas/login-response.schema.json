@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "POST /api/auth/login success body",
+  "type": "object",
+  "required": ["success", "message", "data"],
+  "properties": {
+    "success": { "type": "boolean", "enum": [true] },
+    "message": { "type": "string" },
+    "data": {
+      "type": "object",
+      "required": ["id", "username", "userRole", "email"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "username": { "type": "string", "minLength": 1 },
+        "userRole": { "type": "string", "enum": ["USER", "OWNER", "ADMIN", "Employee"] },
+        "email": { "type": "string", "format": "email" }
+      }
+    }
+  }
+}

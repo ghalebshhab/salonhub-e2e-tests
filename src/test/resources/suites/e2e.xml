@@ -1,0 +1,8 @@
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+<suite name="SalonHub e2e" parallel="classes" thread-count="4" verbose="1">
+    <test name="End-to-end flows">
+        <packages>
+            <package name="com.salonhub.qa.e2e.*"/>
+        </packages>
+    </test>
+</suite>

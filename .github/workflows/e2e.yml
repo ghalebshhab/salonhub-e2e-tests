@@ -1,0 +1,217 @@
+name: E2E tests
+
+# Starts the whole SalonHub stack (MySQL, backend, built frontend) on the
+# runner, fills an empty database with test data, runs a test suite and
+# publishes the Allure report as an artifact.
+#
+# Repository secrets:
+#   E2E_CUSTOMER_PASSWORD, E2E_EMPLOYEE_PASSWORD, E2E_OWNER_PASSWORD,
+#   E2E_SALON2EMPLOYEE_PASSWORD  - any strong passwords; the CI database is new each run
+#   REPOS_TOKEN (optional)       - read access to the backend and frontend repositories,
+#                                  needed only when they are private
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Test suite
+        type: choice
+        options: [regression, smoke, api, ui, e2e]
+        default: regression
+      backend_ref:
+        description: Backend branch, tag or commit
+        default: master
+      frontend_ref:
+        description: Frontend branch, tag or commit
+        default: main
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *" # every day at 06:00 in Jordan
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: salon_dbv2
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+
+    env:
+      SUITE: ${{ inputs.suite || 'regression' }}
+      # Test accounts (read by Config: account.customer.email -> ACCOUNT_CUSTOMER_EMAIL)
+      ACCOUNT_CUSTOMER_EMAIL: lina.customer@salonhub.test
+      ACCOUNT_CUSTOMER_PASSWORD: ${{ secrets.E2E_CUSTOMER_PASSWORD }}
+      ACCOUNT_EMPLOYEE_EMAIL: sara.employee@salonhub.test
+      ACCOUNT_EMPLOYEE_PASSWORD: ${{ secrets.E2E_EMPLOYEE_PASSWORD }}
+      ACCOUNT_OWNER_EMAIL: omar.owner@salonhub.test
+      ACCOUNT_OWNER_PASSWORD: ${{ secrets.E2E_OWNER_PASSWORD }}
+      ACCOUNT_SALON2EMPLOYEE_EMAIL: rami.employee@salonhub.test
+      ACCOUNT_SALON2EMPLOYEE_PASSWORD: ${{ secrets.E2E_SALON2EMPLOYEE_PASSWORD }}
+      MYSQL_PWD: root
+
+    steps:
+      - name: Check out the tests
+        uses: actions/checkout@v4
+
+      - name: Check out the backend
+        uses: actions/checkout@v4
+        with:
+          repository: ghalebshhab/Salon-hub-backend
+          ref: ${{ inputs.backend_ref || 'master' }}
+          path: stack/backend
+          token: ${{ secrets.REPOS_TOKEN || github.token }}
+
+      - name: Check out the frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ghalebshhab/Salon-hub-frontend
+          ref: ${{ inputs.frontend_ref || 'main' }}
+          path: stack/frontend
+          token: ${{ secrets.REPOS_TOKEN || github.token }}
+
+      - name: Check the secrets
+        run: |
+          for name in ACCOUNT_CUSTOMER_PASSWORD ACCOUNT_EMPLOYEE_PASSWORD ACCOUNT_OWNER_PASSWORD ACCOUNT_SALON2EMPLOYEE_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Secret for $name is not set"; exit 1; fi
+          done
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+          cache-dependency-path: |
+            pom.xml
+            stack/backend/pom.xml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: stack/frontend/package-lock.json
+
+      - name: Build the backend
+        working-directory: stack/backend
+        run: sh ./mvnw -B -q -DskipTests package
+
+      - name: Start the backend (local profile)
+        working-directory: stack/backend
+        env:
+          SPRING_PROFILES_ACTIVE: local
+          DB_URL: jdbc:mysql://127.0.0.1:3306/salon_dbv2?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+          DB_USERNAME: root
+          DB_PASSWORD: root
+          MAIL_DELIVERY: log
+          MAIL_USERNAME: ci@salonhub.test
+          LOGIN_RATE_LIMIT_MAX: "1000"
+          # The local profile logs every SQL statement; keep the CI log small.
+          SPRING_JPA_SHOW_SQL: "false"
+          LOGGING_LEVEL_ORG_HIBERNATE_SQL: WARN
+          LOGGING_LEVEL_ORG_HIBERNATE_ORM_JDBC_BIND: WARN
+        run: |
+          export JWT_SECRET="$(openssl rand -base64 64 | tr -d '\n')"
+          jar="$(ls target/*.jar | grep -v -e plain -e original | head -1)"
+          nohup java -jar "$jar" > "$GITHUB_WORKSPACE/backend.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fs http://localhost:8081/api/salons/active > /dev/null; then echo "Backend is up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::The backend did not start"; tail -100 "$GITHUB_WORKSPACE/backend.log"; exit 1
+
+      - name: Fill the database with test data
+        run: bash ci/seed-ci-db.sh
+
+      # A production build served by "vite preview" (it has the same /api proxy as the
+      # dev server). The dev server compiles each page on its first visit, which is
+      # too slow on a fresh runner. VITE_API_BASE_URL=/api wins over .env.production,
+      # so the build calls the local backend and never the production API.
+      - name: Build and serve the frontend
+        working-directory: stack/frontend
+        env:
+          VITE_API_BASE_URL: /api
+          VITE_API_PROXY_TARGET: http://localhost:8081
+        run: |
+          npm ci --no-audit --no-fund
+          npx vite build
+          nohup npx vite preview --host 127.0.0.1 --port 5173 --strictPort > "$GITHUB_WORKSPACE/frontend.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:5173/api/salons/active > /dev/null; then echo "Frontend is up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::The frontend did not start"; cat "$GITHUB_WORKSPACE/frontend.log"; exit 1
+
+      - name: Install the Playwright browser
+        run: >-
+          mvn -B -q test-compile exec:java -e
+          -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.classpathScope=test
+          "-Dexec.args=install --with-deps chromium"
+
+      - name: Run the ${{ env.SUITE }} suite
+        id: tests
+        continue-on-error: true
+        run: mvn -B test -Dsuite="$SUITE" -Dui.baseUrl=http://localhost:5173 -Dapi.baseUrl=http://localhost:8081
+
+      - name: Make the Allure report
+        if: always()
+        run: mvn -B -q allure:report
+
+      - name: Write the summary
+        if: always()
+        run: |
+          file=target/surefire-reports/testng-results.xml
+          if [ -f "$file" ]; then
+            line=$(grep -o '<testng-results[^>]*>' "$file")
+            get() { echo "$line" | sed -n "s/.* $1=\"\([0-9]*\)\".*/\1/p"; }
+            {
+              echo "### SalonHub E2E - suite \`$SUITE\`"
+              echo "| Total | Passed | Failed | Skipped |"
+              echo "|---|---|---|---|"
+              echo "| $(get total) | $(get passed) | $(get failed) | $(get skipped) |"
+              echo
+              echo "Download the **allure-report** artifact and open \`index.html\` with a local web server, or run \`allure open\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: target/site/allure-maven-plugin
+          if-no-files-found: ignore
+
+      - name: Upload the results, traces and server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            target/allure-results
+            target/traces
+            target/surefire-reports
+            backend.log
+            frontend.log
+          if-no-files-found: ignore
+
+      - name: Fail the job when tests failed
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::Some tests failed. See the Allure report artifact."
+          exit 1
